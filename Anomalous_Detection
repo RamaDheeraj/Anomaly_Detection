@@ -1,0 +1,768 @@
+#########################################################
+# Name    : Rama Dheeraj Sourapu                        #                               
+# Project : Frontier_Unsupervised Anomaly Detection     #                               
+# Date    : 05/20/2017                                  #                              
+#########################################################
+
+
+
+##########################     Objective, Introduction of DataSet & Approach     #############################
+#                                                                                                            #
+#   Objective :                                                                                              #
+#   The objective of this project is to identify anomalous user bahaviour using unsupervised                 #
+#   learning techniques from the given one month transaction history. Anomalous behaviour can be             #
+#   based on the number of transactions handled by a particular user on a daily basis and the different      #
+#   types of events handled within each transaction.                                                         #
+#                                                                                                            #
+#   Introduction to Data:                                                                                    #
+#   The dataset comprises of transactional data pertaining to customer service calls from Sykes              #
+#   for one of their clients - Frontier Communications. It includes event data for the last 30 days          #
+#   from the date on which data is extracted. For the current analysis, we are using data which              #
+#   includes around 4.35 million records. Each customer call is a unique transaction. Each record in         #
+#   the data represents an occurrence of an event within a transaction. An event can be anything             #
+#   such as Answer call, Customer Put on hold, End call and so on. There are five variables in the dataset.  #
+#   They are as follows:                                                                                     #
+#   Transaction ID    Unique identifier for transactions                                                     #
+#   User Global ID    Unique identifier of each user. Here, user is a representative from Sykes working      #
+#                     for Frontier Communications                                                            #
+#   Event Name        Description for the type of event                                                      #
+#   CreatedDateTime   Date and time at which the transaction occurred                                        #
+#   LOB ID            Line of Business Identifier                                                            #
+#                                                                                                            #
+#   Approach:                                                                                                #
+#   To find out anomalous user behavior, I have first aggregated the dataset on the date portion of the      #
+#   column 'Date' to calculate the total number of transactions and various events occurred per user ID      #
+#   on each day. I have done so, because performing a day-wise aggregation will enable us in finding out     #
+#   how frequently a specific user is exhibiting anomalous behaviour. On this aggregated data, I have        #
+#   applied unsupervised learning techniques such as k-means, hierarchical and density-based clustering.     #
+#   Based on the clusters formed, I have identified outliers which are nothing but anomalous users Ids.      #                                                       
+#                                                                                                            #
+##############################################################################################################
+
+##########################     2. Project Setup    ######################################
+#                                                                                       #
+#   Data was extracted using the R script 'Get GTID Data Raw Frontier 30 days.R'.       #
+#   Installed and loaded all the required packages. The dataset was read and loaded     #
+#   into another dataframe to serve as a backup copy in case of any unforeseeable       #
+#   problems.                                                                           #
+#                                                                                       #
+#########################################################################################
+
+
+#########Installing & Loading required packages
+
+#For summarizing and aggregating the data
+install.packages("dplyr")
+library(dplyr)
+
+#For transposing certain columns
+install.packages("reshape2")
+library(reshape2)
+
+#For visualizations
+install.packages("ggplot2")
+library(ggplot2)
+
+#Installing and lading the required packages for clustering
+#For evaluating cluster quality
+install.packages("cluster")
+library(cluster)
+
+install.packages("NbClust")
+library(NbClust)
+
+#For cluster visualizations
+install.packages("factoextra")
+library(factoextra)
+
+#For density based clustering (dbscan)
+install.packages("fpc")
+library(fpc)
+
+install.packages("dbscan")
+library(dbscan)
+
+
+#######Reading the data and copying into another data set named 'frontier'
+events = read.csv('myresults.csv', header = T, stringsAsFactors = F)
+frontier = events
+
+###############################     Data Preprocessing     ####################################
+#                                                                                             #               
+#   The below steps have been performed to prepare the data for analysis:                     #    
+#                                                                                             #
+#   1. Data has been ordered according to CreatedDateTime variable. I observed that time      #
+#   in this variable has been saved in 0-12 hours (AM & PM) format. I transformed this        #
+#   into 24 hours (00-23) for easy interpretation.                                            # 
+#                                                                                             #
+#   2. It appeared that the data was clean without missing values. I ensured that there       #
+#   were no missing values by building a function for missing value detection and verified    # 
+#   the data set.                                                                             #
+#                                                                                             #
+#   3. I verfied the structure of the data set and found that some variables were being       #
+#   misclassified as intgers and characters. For instance, all the ID variables containing    #
+#   numeric values were being considered as integers. I have converted such variables into    #
+#   factor variables.                                                                         #
+#                                                                                             #
+###############################################################################################
+
+
+#Viewing the frontier dataset
+View(frontier)
+
+##### Step 1:
+#Time in CreatedDateTime has been saved in AM and PM format.
+#Converting time into 24 hours (00-23) format for easy readability and then ordered data according to CreatedDateTime
+frontier$CreatedDateTime=format(strptime(frontier$CreatedDateTime,"%m/%d/%Y %I:%M:%S %p"), "%Y/%m/%d %H:%M:%S")
+frontier=frontier[order(as.Date(frontier$CreatedDateTime)),]
+
+
+#### Step 2: 
+#Function to detect missing values
+msngdctn = function(input)
+{
+  n = length(colnames(input)) 
+  a <- NULL
+  b <- NULL 
+  for(i in 1:n) 
+  {
+    a[i]=sum(is.na(input[,i])) 
+    b=a/nrow(input) 
+  }
+  result=data.frame(colnames(input),a,b) 
+  colnames(result) = c("column Name", "# Missing Values", "% Missing Value")
+  return(result) 
+}
+msngdctn(frontier)
+#From the result, it was confirmed that there were no missing values in the data.
+
+#### Step 3:
+#Verifying the structure of the data set to examine variables
+str(frontier)
+
+#TransactionId has been saved as character but should be a categorical variable.
+#Converting TransactionId into a categorical variable.
+frontier$TransactionId=factor(frontier$TransactionId)
+
+#UserGlobalId and LobId have been saved as integers but these should be categorical variables. 
+#Because every user is an individual representative and every line of business (LobId) is different.
+#Converting UserId and LobId into categorical (factor) variables. 
+frontier$UserGlobalId = factor(frontier$UserGlobalId)
+frontier$LobId = factor(frontier$LobId)
+
+#EventName has been saved as character but it should be categorical variable.
+#Because each EventName represents an event happened in a transaction.
+#Converting EventName into a categorical variable.
+frontier$EventName = factor(frontier$EventName)
+
+
+##########################     Exploratory Data Analysis of Frontier Dataset     ##########################
+#                                                                                                         #
+#   In this step, Univariate and bivariate analyses were performed on the variables to understand the     #
+#   explanatory nature of the variables and identify any relationships between them. I have included      #
+#   plots to visualize the patterns that can aid in understanding the results of the analysis.            #
+#                                                                                                         #
+###########################################################################################################
+
+
+#Total number of unique transactions recorded in 30 days.
+length(levels(frontier$TransactionId))
+#125511 different TransactionIds are present. It means 126363 transactions are recorded in 30 days.
+
+
+#Total number of unique users in the dataset
+length(levels(frontier$UserGlobalId))
+#529 users are present in total.
+levels(frontier$UserGlobalId)
+#There is one UserGlobalId with a value of 0.
+#Assuming '0' is also a UserGlobalId but not as an misrecorded value
+
+###### Analyzing EventNames
+
+#Checking different EventNames
+levels(frontier$EventName)
+length(levels(frontier$EventName))
+#18 types of events are present in the data
+
+#Summarizing EventName with the help of frequency distribution
+data.frame(table(frontier$EventName))
+#Window Toggle is the most frequently occuring event.
+#Supervisor Call, Supervisor AWS login,Barge, Boot, Leave Room and whisper are the least frequent transactions
+
+data.frame(round(prop.table(table(frontier$EventName)),5))
+nrow(frontier[frontier$EventName=="Barge" | frontier$EventName=="Boot" | frontier$EventName=="Leave Room"
+              | frontier$EventName=="Supervisor AWS Login" | frontier$EventName=="Supervisor Call" 
+              | frontier$EventName=="Whisper", ])/nrow(frontier)
+#These events were very rare and accounted to less than 0.004% of the total events.
+
+#Visualizing the dustribution of EventName variable
+ggplot(frontier, aes(EventName)) + geom_bar(fill = "red")+theme_bw()+
+  scale_x_discrete("Event") + 
+  scale_y_continuous("Count") +
+  coord_flip()+ labs(title = "EventName Distribution") + theme_gray()
+
+
+###### Analyzing LobId
+
+#Obtaining unique list of Lob IDs
+levels(frontier$LobId)
+#Only 2 LobIds are there in the data."0" and "17354"are the two LobIds.
+
+#Summarizing LobId with the help of frequency distribution
+data.frame(table(frontier$LobId))
+data.frame(round(prop.table(table(frontier$LobId)),3))
+#95.7% of the events are recorded in line of business having LobId as 17354 and only 4.3% are having LobId as 0.
+
+#Visualizing the dustribution of LobId
+ggplot(frontier, aes(LobId)) + geom_bar(fill = "blue")+theme_bw()+
+  scale_x_discrete("LobId") + 
+  scale_y_continuous("Count") +
+  coord_flip()+ labs(title = "LobId Distribution") + theme_gray()
+
+
+####Bivariate Analysis of variables
+
+#Exploring the relationship between LobId and events 
+EventLobid=data.frame(tapply(frontier$EventName,list(frontier$EventName,frontier$LobId),length))
+View(EventLobid)
+#Events are mutually exclusive with respect to line of business(LobId).
+#LobId-17354 has 7 types of events and LobId-0 has 11 types of events
+#Exploring these two sectors separately may present a better understanding of the nature of events.
+#However, these two sectors can be explored separately only if transactions are also mutually exclusive 
+#with LobIds.
+
+#Exploring the relationship between LobId and transactions
+UserLobid=data.frame(tapply(frontier$LobId,list(frontier$TransactionId,frontier$LobId),length))
+View(UserLobid)
+# A transaction can contain events from both LobId-0 and LobId-17354.
+# Hence we cannot segment data based solely on LobId.
+
+
+###################################     Data Aggregation - UserGlobalId     ###################################
+#                                                                                                             #
+#   In this step, I have prepared the dataset that was used for the actual analysis. Firstly, I aggregated    #
+#   the dataset to calculate total number of transactions handled by a user in a day. After this, I have      #
+#   aggregated the data to calculate total number of various events handled by a user per day. I then merged  #
+#   the results of these two steps into a single dataset. Then, I looked for records with missing values in   #
+#   any of the columns. These columns tell us whether a particular event was handled by a user on that day.   #
+#   I then identified the columns having the most number of missing values and clubbed them based on their    #
+#   Lob IDs. I chose to do the previous step for two reasons:                                                 #
+#   (i) To reduce the curse of dimensionality and                                                             #
+#   (ii) To retain the explanatory power of all the variables                                                 #
+#                                                                                                             #
+###############################################################################################################
+
+#Extracting Date variable from CreatedDateTime variable
+frontier$Date=as.factor(format(strptime(frontier$CreatedDateTime, "%Y/%m/%d %H:%M:%S"),"%Y/%m/%d"))
+#Converting the date variable into a date formatted variable 
+frontier$Date=as.Date(frontier$Date,format="%Y/%m/%d")
+
+#### Agrregating number of transactions handled by user in the particular day
+
+#Total number of events recorded by an user in a day
+transactions=aggregate(frontier$TransactionId,list(frontier$UserGlobalId,frontier$Date,frontier$TransactionId),length)
+#Verifying the total number of unique transaction IDs in data
+length(transactions$Group.3)
+#The above step gave 126697 unique number of transactions in the data.
+#However, there are only 125511 unique transactions as verified under the exploratory data analysis step.
+#This meant that few transactions were being counted more than once.
+#One reason for this could be due to a specific transaction spanning over two or more (successive) days.  
+
+##Checking the possibility of trasactions occurring in two or more successive days
+a=aggregate(frontier$Date,list(frontier$TransactionId,frontier$Date),length)
+b=aggregate(a$Group.2,list(a$Group.1),length)
+#From the above, it was clear that few transactions had two date values
+
+#Hence transactions were being counted for both the days.
+#To deal with this issue, I have created a new date column that captures the earliest date for each transaction.  
+#Calculating earliest date for each transaction
+earliestdate=aggregate(frontier$Date,list(frontier$TransactionId),min)
+colnames(earliestdate)=c("TransactionId","EarliestDate")
+#Merging the new date column with the aggregated dataset obtained in the previous step 
+nfrontier=merge(frontier,earliestdate,by="TransactionId")
+
+#Total number of events recorded by an user in a day
+transaction=aggregate(nfrontier$TransactionId,list(nfrontier$UserGlobalId,nfrontier$EarliestDate,
+                                                   nfrontier$TransactionId),length)
+length(transaction$Group.3)
+#125511 transactions are there in total.
+
+#Total number of transactions handled by user in a particular day
+tnsagg=aggregate(transaction$Group.3,list(transaction$Group.1,transaction$Group.2),length)
+#Renaming column names of tnsagg
+colnames(tnsagg) = c("UserGlobalId","Date","Transactions")
+
+#Aggregation on Event-Date-User 
+eventagg=aggregate(nfrontier$EventName,list(nfrontier$UserGlobalId,nfrontier$EarliestDate,nfrontier$EventName),length)
+neventagg=reshape(eventagg,timevar = "Group.3",idvar = c("Group.1","Group.2"),direction = "wide")
+
+#Renaming Columns
+colnames(neventagg)= c("UserGlobalId","Date","AgentAsksQuestion","AgentTileViewed","AnswerCall","AvayaOneXAgentEvent","Barge",
+                       "Boot","CustomerPutOnHold","EndCall","EnterRoom","LeaveRoom","Listen","ScreenView","SendChatWithOutClickingOnName",
+                       "SupervisorAWSLogin","SupervisorCall","SupervisorClearedAgentAlert","Whisper","WindowToggle")
+
+
+#Merging tnsagg & neventagg to obtain the dataset containing total number of transactions & events handled by each user per day
+final1=merge(tnsagg,neventagg,by = c("UserGlobalId","Date"))
+
+#### Looking for records with missing values - A missing value can be understood as a non-occurrence of an event on that day
+msngdctn = function(input)
+{
+  n = length(colnames(input)) 
+  a <- NULL
+  b <- NULL 
+  for(i in 1:n) 
+  {
+    a[i]=sum(is.na(input[,i])) 
+    b=a/nrow(input) 
+  }
+  result=data.frame(colnames(input),a,b) 
+  colnames(result) = c("column Name", "# Missing Values", "% Missing Value")
+  return(result) 
+}
+msngdctn(final1)
+#Except AnswerCall, EndCall, CustomerPutOnHold and Window Toggle, all the remaining events have missing values 
+#for more than 40% of the total number of records.
+
+#These columns with missing values were clubbed together based on their Lob IDs
+final1$EventsLobId0=rowSums(final1[,c(5,8,9,14,15,17,19,20)],na.rm = T)
+final1$EventsLobId17354=rowSums(final1[,c(4,7,12,13,16,18)],na.rm = T)
+
+#Checking for missing values after clubbing the events above
+nrow(final1[final1$EventsLobId0==0,])/nrow(final1)
+nrow(final1[final1$EventsLobId17354==0,])/nrow(final1)
+
+#Setting missing values to zero for ease of computation
+final1[is.na(final1)] = 0
+
+#Below is the final dataset containing nine columns that was used for the anomaly detection analysis.
+final=final1[,c(1,2,3,6,10,11,21,22,23)]
+#Columns in the above dataset:
+### 1. User ID - Unique user identifier
+### 2. Date - Earliest date of a transaction
+### 3. Transactions - Total number of transactions per user per day
+### 4. Answer Call - Number of times 'Answer call' event occurred for that user on that day
+### 5. End Call - Number of times 'End call' event occurred for that user on that day
+### 6. Customer put on hold - Number of times 'Customer put on hold' event occurred for that user on that day
+### 7. Window Toggle - Number of times 'Window Toggle' event occurred for that user on that day
+### 8. LobID events 0 - Total number of events except for the above four, having Lob ID 0
+### 9. LobID events 17354 - Total number of events except for the above four, having Lob ID 17354
+
+#### Preliminary outlier detection
+#Performing univariate and bivariate analyses on all the columns of final dataset to detect potential outliers
+
+####Analyzing Transactions
+mean(final$Transactions)#16.77282
+sd(final$Transactions)#9.723618
+quantile(final$Transactions,probs = seq(0.1,1,by=0.1))
+#Median is also 16 for Transactions
+#On an average, 16-17 transactions are being handled by a user in a day.
+#Only 10% of users handled more than 30 transactions in a day
+
+#Visualizing Transactions dustribution through Histogram.
+ggplot(final, aes(Transactions)) + geom_histogram(binwidth = 2)+
+  scale_x_continuous("Transactions", breaks = seq(0,90,by = 10))+
+  scale_y_continuous("Count", breaks = seq(0,800,by = 40))+
+  labs(title = "Transactions")
+#UserGlobalIds handled less than 4 or greater than 50 transactions in a day could potentially be detected as anomalous.
+
+####Analyzing AnswerCall
+mean(final$AnswerCall)#9.180142
+sd(final$AnswerCall)# 7.496994
+sum(final$AnswerCall)#68695
+quantile(final$AnswerCall,probs = seq(0.1,1,by=0.1),na.rm = T)
+#Less than 10 AnswerCall events are recorded for 60%  of users in a day
+
+#Visualizing AnswerCall dustribution through Histogram
+ggplot(final1, aes(AnswerCall)) + geom_histogram(binwidth = 2)+
+  scale_x_continuous("Transactions", breaks = seq(0,60,by = 5))+
+  scale_y_continuous("Count", breaks = seq(0,1400,by = 50))+
+  labs(title = "AnswerCall Events")
+#UserGlobalIds who answered greater than 40 calls in a day could potentially be detected as anomalous.
+
+####Analyzing EndCall
+mean(final$EndCall)#9.102633
+sd(final$EndCall)#7.468326
+sum(final$EndCall)#68115
+quantile(final$EndCall,probs = seq(0.1,1,by=0.1),na.rm = T)
+# Less than 10 EndCall events are recorded for 60%  of users in a day
+
+#Visualizing EndCall dustribution through Histogram and Box plots
+ggplot(final, aes(EndCall)) + geom_histogram(binwidth = 2)+
+  scale_x_continuous("EndCall", breaks = seq(0,60,by = 5))+
+  scale_y_continuous("Count", breaks = seq(0,1400,by = 50))+
+  labs(title = "EndCall Events")
+#UserGlobalIds who ended greater than 35 calls in a day could potentially be detected as anomalous.
+
+####Analyzing Window Toggle
+mean(final$WindowToggle)#536.1744
+sd(final$WindowToggle)#395.0072
+sum(final$WindowToggle)#4012193
+quantile(final$WindowToggle,probs = seq(0.1,1,by=0.1),na.rm = T)
+#More than 1100 Window Toggle events are recorded in a day for 10%  of users. 
+
+#Visualizing Window Toggle dustribution through Histogram and Box plots
+ggplot(final, aes(WindowToggle)) + geom_histogram(binwidth = 50)+
+  scale_x_continuous("Window Toggle", breaks = seq(0,3000,by = 100))+
+  scale_y_continuous("Count", breaks = seq(0,500,by = 50))+
+  labs(title = "Window Toggle Events")
+#UserGlobalIds who window toggled less than 50 or greater than 2500 times in a day could be detected as anomalous.
+
+####Analyzing CustomerPutOnHold
+mean(final$CustomerPutOnHold)#3.925698
+sd(final$CustomerPutOnHold)#6.182737
+quantile(final$CustomerPutOnHold,probs = seq(0.1,1,by=0.1))
+#Across all days and users, 30% of them never put customers on hold. 
+#Because of the above reason, standard deviation is gretaer than mean of this event.
+
+#Visualizing CustomerPutOnHold dustribution through Histogram
+ggplot(final, aes(CustomerPutOnHold)) + geom_histogram(binwidth = 2)+
+  scale_x_continuous("CustomerPutOnHold", breaks = seq(0,130,by = 5))+
+  scale_y_continuous("Count", breaks = seq(0,2000,by = 100))+
+  labs(title = "CustomerPutOnHold Events")
+#UserGlobalIds who put customer on hold for greater than 50 times in a day could potentially be detected as anomalous.
+
+##Analyzing EventsLobId0
+mean(final$EventsLobId0)#2.631832
+sd(final$EventsLobId0)# 4.441317
+quantile(final$EventsLobId0,probs = seq(0.1,1,by=0.1))
+#40% of users didnt perform any events aggregated into EventsLobId0 in a day. 
+#Due to this reason, standard deviation is higher than mean for this event.
+
+#Visualizing EventsLobId0 dustribution through Histogram
+ggplot(final, aes(EventsLobId0)) + geom_histogram(binwidth = 2)+
+  scale_x_continuous("EventsLobId0", breaks = seq(0,60,by =10))+
+  scale_y_continuous("Count", breaks = seq(0,3000,by = 100))+
+  labs(title = "EventsLobId0 Events")
+#UserGlobalIds who handled more than 40 events under EventsLobId0 in a day could potentially be detected as anomalous.
+
+
+##Analyzing EventsLobId17354
+mean(final$EventsLobId17354)#20.30977
+sd(final$EventsLobId17354)#58.06703
+quantile(final$EventsLobId17354,probs = seq(0.1,1,by=0.1))
+#40% of users didnt handle any events under EventsLobId1354 in a day. 
+#This is causing standard deviation to be higher than mean of this event.
+
+#Visualizing EventsLobId17354 dustribution through Histogram
+ggplot(final, aes(EventsLobId17354)) + geom_histogram(binwidth = 25)+
+  scale_x_continuous("EventsLobId17354", breaks = seq(0,2000,by = 50))+
+  scale_y_continuous("Count", breaks = seq(0,3000,by = 100))+
+  labs(title = "EventsLobId17354 Events")
+#UserGlobalIds who handled more than 500 events under EventsLobId1354 in a day could potentially be detected as anomalous.
+
+####Box plot - Checking outliers
+boxplot(scale(final[,-c(1,2)]),col ="grey")
+# Dots represent the outliers of that respective variables
+
+
+
+####################################      Clustering & Analysis    ############################################
+#                                                                                                             #
+#   In this step, I have used three different clustering techniques to detect potential outliers and thereby  #
+#   analyze anomalous user behaviour. There are four types of widely used clustering techniques of which      #
+#   I have used the following three techniques:                                                               #
+#   (i) Partitioning (K-means) (ii) Hierarchical (iii) Density based (DBSCAN) algorithms.                     #
+#   In the sections below, I have described the pros, cons and limitations of each algorithm in detail.       # 
+#                                                                                                             #
+###############################################################################################################
+
+####Scaling the data for achieving equal weightage to all variables in clustering
+final.scaled = scale(final[, c(-1,-2)])
+
+
+#######################################   K-means clustering algorithm   ################################################
+#                                                                                                                       # 
+#     K-Means Clustering is an unsupervised learning algorithm used for clustering data based on their                  #
+#     similarity for finding the patterns within the data.                                                              #
+#`                                                                                                                      #
+#     Why K-means clustering                                                                                            #
+#     It can find pure sub clusters if large number of clusters are specified which helps in better understanding       #
+#     the nature of each cluster (cluster is a group of users) and identify outliers.                                   #
+#     Low Time Complexity. Therefore, works well with large datasets.                                                   #
+#                                                                                                                       #
+#     Limitations                                                                                                       #
+#     K-means clustering requires prior knowledge of K (number of clusters) which is challenging.                       #
+#     Doesn't work well for non-spherical data, that is, it cannot be used with arbitrary distance functions.           #
+#     Different runs of the algorithm yield different results, because of randomness in choosing cluster centers.       #
+#                                                                                                                       #
+#########################################################################################################################   
+
+
+#Clustering data using k-means() function with 5 clusters. This number of clusters was picked at random.
+#A nstart value of 10 indicates that 10 initial random centroids are picked and the best one among them is ultimately chosen.
+km.res = kmeans(final.scaled, 5, nstart = 10)
+km.res
+
+#Since the number of clusters was chosen at random, it may not be the optimum number of clusters for the given data.
+#To overcome this, I tried finding optimum number of clusters using Elbow-method
+# Drawing Elbow plot
+k.max = 20 # declaring the input variable to the function-maximum number of clusters on the Elbow plot
+fn = sapply(1:k.max,function(k){kmeans(final.scaled, k, nstart=10 )$tot.withinss})
+
+#Visualizing Elbow plot (k = 2 to k = 20)
+plot(1:k.max, fn,type="b", pch = 19, frame = TRUE, xlab="Number of clusters-K", ylab="within-cluster sum of squares distance")
+abline(v=4, lty=2)
+# At k=4 clusters, there is an turning point which indicates that 4 is an optimal number for clustering in this case 
+
+#Running K-means clustering with k=4
+km.res = kmeans(final.scaled, 4, nstart = 10)
+km.res
+
+#Attaching kmeans clusters to the 'final' data
+final$kmeansc=km.res$cluster
+
+##Finding cluster quality using Average silhouette method
+#High average silhouette width indicates good clustering
+sil = rep(0, k.max)
+#Computing the average silhouette width for k = 2 to k = 20
+for(i in 2:k.max)
+{
+  km.sil = kmeans(final.scaled, centers = i, nstart = 10)
+  ss = silhouette(km.sil$cluster, dist(final.scaled))
+  sil[i] = mean(ss[, 3])
+}
+
+# Plotting average silhouette width
+plot(1:k.max, sil, type = "b", pch = 19, frame = FALSE, xlab = "Number of clusters-k")
+abline(v = which.max(sil), lty = 2)
+#From the plot, it was observed that highest quality clusters were formed if the number of clusters is 2.
+#However, when number of clusters is 4, the resulting clusters are still of high quality which is inline with 
+#the results obtained from Elbow-method.
+
+#Visualization of K-means clustering using fviz_cluster() function from "factoextra" package
+#ellipse.type specifies the frame type
+fviz_cluster(km.res, final[, c(-1,-2)], ellipse.type = "norm")
+#Visualizing with different color palette and theme. 
+fviz_cluster(km.res, final[, c(-1,-2)], palette = "Set2", ggtheme = theme_minimal())
+
+#Interpreting the results for outlier detection
+#Calculated the distance between the objects and cluster centers to find top 75 outliers (1% of total data).
+#"centers" is a data frame with 4 cluster centers.
+centers = km.res$centers[km.res$cluster, ]
+#"distances" is sum of square of distances between center and the objects with in the cluster.
+distances = sqrt(rowSums((final[,c(-1,-2)] - centers)^2))
+outliers = order(distances, decreasing=T)[1:75]
+#Printing the row numbers of top 75 outliers
+outliers
+
+#Creating kmeans outlier data set
+kmeanoutlier=final[outliers,]
+View(kmeanoutlier)
+
+#Exploring outlier behaviour through transactions and events 
+behav = function(input)
+{
+  n = length(colnames(input)) 
+  a <- NULL
+  b <- NULL 
+  c <- NULL
+  for(i in 1:n) 
+  {
+    a[i]=mean(input[,i])
+    b[i]=median(input[,i]) 
+    c[i]=sd(input[,i])
+  }
+  result=data.frame(colnames(input),a,b,c) 
+  colnames(result) = c("column Name", "Mean", "Median"," Standard Deviation")
+  return(result) 
+}
+behav(kmeanoutlier[,-c(1,2,10)])
+
+#       column Name       Mean Median  Standard Deviation
+#1      Transactions   31.96000     33           10.057188
+#2        AnswerCall   28.69333     29            9.251696
+#3 CustomerPutOnHold   20.53333     14           22.365111
+#4           EndCall   28.30667     28            9.194554
+#5      WindowToggle 2064.25333   1974          264.474650
+#6      EventsLobId0   11.14667      8           11.033969
+#7  EventsLobId17354  159.06667     32          263.919999
+
+#The above table describes the distribution of transactions and events of outliers.
+
+#Checking the frequency of anomalous user behaviour
+data.frame(table(kmeanoutlier$UserGlobalId))
+#Results shows that 664448 and 644021  are the most anomalous users.
+
+
+#######################################     Hierarchical clustering algorithm    ########################################
+#                                                                                                                       #
+#    Hierarchical clustering is an alternative clustering approach which builds a hierarchy using bottom-up or          # 
+#    top-down approaches. In this case, I have used bottom-up method of hierarchical clustering.                        #
+#    Process: In step-1 each datapoint is a cluster, in step-2 closest two clusters combines into one cluster           #
+#    and the process repeats till all the data points are in a single cluster and forms a structure like dendrogram.    #
+#    In order to find the closeness between clusters, we use methods like complete linkage clustering,                  #
+#    single linkage clustering, mean linkage clustering and centroid linkage clustering.                                #
+#                                                                                                                       #
+#    Advantages:                                                                                                        #
+#    Hierarchical clustering can give different partitionings based on the level of resolution.                         #
+#    Hierarchical clustering doesn’t need the number of clusters to be specified beforehand.                            #
+#    Hierarchical algorithm shows more quality as compared to k-means algorithm.                                        #
+#                                                                                                                       #
+#    Limitations:                                                                                                       #
+#    Doesn't work well with large datasets.                                                                             #
+#    Complex and time-consuming.                                                                                        #
+#    Clusters with less observations has to be considered as outliers.                                                  #
+#                                                                                                                       #
+#########################################################################################################################
+
+#Using hclust() function for clustering and dist() function for generating distance matrix.
+#Using complete linkage clustering: Finding maximum possible distance between points belonging to two different clusters.
+dist.res = dist(final.scaled, method = "euclidean")
+#HC is a hierarchial clustering result
+hc = hclust(dist.res, method = "complete")
+
+
+#Visualizing the clusters using plot() function
+plot(hc, labels = FALSE, hang = c(-1,-2))
+#From the plot, after 4 clusters distance between the clusters is not appreciably decreasing.
+#Hence, 4 is the optimal number of clusters.
+#Adding rectangle around the 4 clusters in a dendogram
+rect.hclust(hc, k = 4, border = 2:4)
+
+## Cuts a hc-clust tree  into 4 clusters.
+clusterCut = cutree(hc, 4)
+
+#Attaching hierarchical clusters to the 'final' data
+final$hc=clusterCut
+
+#Checking number of observations in each cluster
+table(final$hc)
+#Cluster-2, cluster-3 and cluster-4 have very less number of observations.
+#Hence, the members of these clusters are being considered as outliers.
+
+#Outliers derived from hierarchical clustering
+hcoutlier=final[final$hc==2|final$hc==3|final$hc==4,-10]
+View(hcoutlier)
+#Exploring outlier behaviour using 'behav' function
+behav(hcoutlier[,-c(1,2,10)])
+
+#       column Name       Mean Median  Standard Deviation
+#1      Transactions   33.31818   33.0            8.363107
+#2        AnswerCall   28.95455   29.0            9.973667
+#3 CustomerPutOnHold   48.22727   47.0           28.204917
+#4           EndCall   28.50000   28.5           10.234163
+#5      WindowToggle 1844.18182 1965.0          550.145404
+#6      EventsLobId0   15.09091   11.0            9.918281
+#7  EventsLobId17354  630.59091  511.0          432.782763
+#The above table describes the distribution of transactions and events of outliers.
+
+#Checking the frequency of anomalous user behaviour
+data.frame(table(hcoutlier$UserGlobalId))
+#Results shows that 664448 (8 times), 644021 (3 times) and 657166 (3 times) are the most anomalous users.
+
+
+
+
+#########################################           DBSCAN Algorithmn            ###############################################
+#                                                                                                                              # 
+#     DBSCAN (Density-Based Spatial Clustering and Application with Noise)                                                     #
+#     The key idea behind DBSCAN is the neighborhood in a given radius has to contain at least the specified                   #
+#     number of points to consider as a cluster and the points that lie alone in low-density regions are marked                #
+#     as outliers.                                                                                                             #
+#                                                                                                                              #
+#     Why DBSCAN:                                                                                                              #
+#     Partitioning methods and hierarchical clustering are good for finding spherical or convex shaped clusters.               #
+#     They work well for compact and well separated clusters only.                                                             #
+#     They are also severely affected by the presence of noise and outliers in the data.                                       #
+#     But, the clusters of real world data are usually arbitrarily shaped (oval, linear,nonconvex and "S" shape clusters)      #
+#     and may contain many outliers and noise. This kind of data can be efficiently handled by DBSCAN algorithm                #
+#     because of its robust nature.                                                                                            #
+#                                                                                                                              #
+#     Advantages:                                                                                                              #
+#     DBSCAN can be used to identify clusters of any shape in data set containing noise and outliers.                          #
+#     DBSCAN is robust algorithm for outlier detection.                                                                        #
+#                                                                                                                              #
+#     Limitations:                                                                                                             #
+#     It can not handle data of varying densities.                                                                             #
+#     Sensitive to clustering parameters, hard to determine correct set of parameters.                                         #
+#     Sampling affects density measures.                                                                                       #
+#                                                                                                                              #
+################################################################################################################################
+
+#Clustering data using dbscan() function
+#Values for eps and MinPts were randomly chosen.
+#MinPts observation says the minimum number of clusters required for forming a cluster
+#eps is the average distances of every point to its MinPts nearest neighbors
+db = fpc::dbscan(final.scaled, eps = 5, MinPts = 10)
+db
+#2 clusters and 8 observations have been detected as outliers.
+
+#Optimizing the eps value
+#In the knee graph below, the turning point at the knee is the threshold for eps value.
+#kNNdistplot() from dbscan package is used to plot a knee graph
+dbscan::kNNdistplot(final.scaled, k =  20)
+abline(h = 2.5, lty = 2)
+#From the plot, it can be seen that 2.5 is the optimised eps value (distance).
+
+#Running DBSCAN clustering again with optimized eps
+db = fpc::dbscan(final.scaled, eps = 2.5, MinPts = 10)
+db
+#33 observations have been detected as outliers
+#cluster 0 representss to outliers.
+
+#Visualizing clusters and outliers using fviz_cluster() function
+fviz_cluster(db, final.scaled, stand = FALSE, frame = FALSE, geom = "point", pointsize=0.4, outlier.color = "black", outlier.shape = 4)
+#Black points in th DBSCAN plot are outliers.
+
+#Attaching dbscan clusters to the 'final' data
+final$dbc=db$cluster
+
+#creating bdscan outliers data set
+dboutlier=final[final$dbc==0,-c(10,11,12)]
+View(dboutlier)
+#Exploring outlier behaviour using 'behav' function 
+behav(dboutlier[,-c(1,2)])
+
+#        column Name       Mean Median  Standard Deviation
+#1      Transactions   34.18182     33            12.54107
+#2        AnswerCall   29.57576     29            11.01712
+#3 CustomerPutOnHold   40.09091     35            26.67673
+#4           EndCall   28.69697     28            10.72813
+#5      WindowToggle 1777.18182   1932           647.63524
+#6      EventsLobId0   20.39394     13            15.76773
+#7  EventsLobId17354  474.84848    415           421.57518
+#The above table describes the distribution of transactions and events of outliers.
+
+#Checking the frequency of anomalous user behaviour
+data.frame(table(dboutlier$UserGlobalId))
+#Results shows that 664448 (8-times), 644021(4-times), 657166 (3-times) and 643969 (3-times)  are the most anomalous users.
+
+###Compiling the results of three algorithms 
+#664448 and 644021 are the most anomalous users.
+
+
+
+#####################################       Ideas for future implementation    #################################################
+#                                                                                                                              #
+#   Unsupervised anomalous detection with multiple stage model regression :                                                    #
+#   The main focus of the analysis performed was detecting anomalous users behaviour based on number of                        #
+#   transactions and events handled by a user on a daily basis.                                                                #
+#   I have an idea of detecting anomalous users using multiple stage regression models. I believe that this                    #
+#   algorithm is very robust and  can be further improved with business domain knowledge. In the first stage of this           #
+#   algorithm, we have to perform regression analysis on the duration of transaction based on the different events occurred    #
+#   in the transaction. This can be implemented using the  equation shown below:                                               #                           #
+#                                                                                                                              #
+#   t = a1*e1 + a2*e2  + a3*e3 ....... (1)                                                                                     #
+#                                                                                                                              #
+#   t - Total duration of a transaction (call)                                                                                 #
+#   a1,a1,a3 -  Coefficients which determine impact on the duration of call based on their nature                              #
+#   e1,e2,e3 -  Frequency of events in the call                                                                                #
+#                                                                                                                              #
+#   In the second stage, transactions has to be segregated based on the nature and frequency of events occured in the call     #
+#   Then his daywise behaviour can be analysed using the equation below:                                                       #
+#                                                                                                                              #
+#   d = b1*t1 + b2*t2 + b3*t3 ......... (2)                                                                                    #
+#                                                                                                                              #
+#   d         - Total duration of user working hours                                                                           #
+#   b1,b2,b3  - Coefficients which determine impact of different transactions handled by the user in that day                  #
+#   t1,t2,t3 -  Frequency of transactions in that day                                                                          #
+#                                                                                                                              #
+#   At first we will assume the linear relationship in these two equations, then we can find the actual relation using         #
+#   regression diagnostics. Then we can transform the equation using principle like boxtidwell and boxcox. After this,         #
+#   we can identify the anomalous users using cook distance or any other approach. In this way, we can detect and anayze       #
+#   anomalous user behaviour. There might be gaps in this alogorithm. I beleive those gaps can be covered with the help        #
+#   business domain knowledge and further research and this algorithm can be tuned in such a way that the results can be       #
+#   used to improve business process efficiency.                                                                               #
+#                                                                                                                              #
+################################################################################################################################
